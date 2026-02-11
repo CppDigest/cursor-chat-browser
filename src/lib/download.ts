@@ -55,6 +55,20 @@ export function convertChatToMarkdown(tab: ChatTab, includeMetadata = true): str
     if (bubble.metadata?.cost != null) {
       markdown += `_Cost: ${bubble.metadata.cost}_\n\n`
     }
+    if (bubble.metadata?.toolCalls?.length) {
+      for (const tc of bubble.metadata.toolCalls) {
+        markdown += `_Tool: ${tc.name || 'unknown'}${tc.status ? ` (${tc.status})` : ''}_\n\n`
+      }
+    }
+    if (bubble.metadata?.thinking) {
+      const thinkingText = typeof bubble.metadata.thinking === 'string' ? bubble.metadata.thinking : (bubble.metadata.thinking as any)?.text || ''
+      if (thinkingText) {
+        markdown += `<details><summary>Thinking${bubble.metadata.thinkingDurationMs ? ` (${(bubble.metadata.thinkingDurationMs / 1000).toFixed(1)}s)` : ''}</summary>\n\n${thinkingText}\n\n</details>\n\n`
+      }
+    }
+    if (bubble.metadata?.contextWindowPercent != null) {
+      markdown += `_Context window: ${bubble.metadata.contextWindowPercent.toFixed(1)}% remaining_\n\n`
+    }
     if (bubble.text) {
       markdown += bubble.text + '\n\n'
     } else if (bubble.type === 'ai') {
@@ -229,7 +243,7 @@ export function downloadJson(tab: ChatTab) {
 }
 
 export function downloadCsv(tab: ChatTab) {
-  const headers = ['conversation_id', 'message_index', 'role', 'model', 'input_tokens', 'output_tokens', 'cached_tokens', 'response_time_ms', 'cost', 'timestamp', 'text_preview']
+  const headers = ['conversation_id', 'message_index', 'role', 'model', 'input_tokens', 'output_tokens', 'cached_tokens', 'response_time_ms', 'cost', 'tool_name', 'tool_status', 'thinking_duration_ms', 'context_window_pct', 'timestamp', 'text_preview']
   const rows: string[][] = [headers]
   tab.bubbles.forEach((bubble, i) => {
     const textPreview = (bubble.text || '').replace(/\r?\n/g, ' ').slice(0, 200)
@@ -239,6 +253,10 @@ export function downloadCsv(tab: ChatTab) {
     const cachedTokens = bubble.metadata?.cachedTokens ?? ''
     const responseTimeMs = bubble.metadata?.responseTimeMs ?? ''
     const cost = bubble.metadata?.cost ?? ''
+    const toolName = bubble.metadata?.toolCalls?.[0]?.name ?? ''
+    const toolStatus = bubble.metadata?.toolCalls?.[0]?.status ?? ''
+    const thinkingDurationMs = bubble.metadata?.thinkingDurationMs ?? ''
+    const contextWindowPct = bubble.metadata?.contextWindowPercent ?? ''
     const timestamp = bubble.timestamp ? new Date(bubble.timestamp).toISOString() : ''
     const role = bubble.type === 'user' ? 'user' : 'assistant'
     rows.push([
@@ -251,6 +269,10 @@ export function downloadCsv(tab: ChatTab) {
       String(cachedTokens),
       String(responseTimeMs),
       String(cost),
+      toolName,
+      toolStatus,
+      String(thinkingDurationMs),
+      String(contextWindowPct),
       timestamp,
       textPreview.replace(/"/g, '""')
     ])

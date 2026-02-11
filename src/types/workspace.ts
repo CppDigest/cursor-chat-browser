@@ -10,7 +10,15 @@ export interface ChatBubble {
   timestamp?: number;
 }
 
-/** Per-message metadata (model, tokens, tools, timing, cost). */
+/** Tool call extracted from toolFormerData. */
+export interface ToolCall {
+  name?: string;
+  params?: string;
+  result?: string;
+  status?: string;
+}
+
+/** Per-message metadata (model, tokens, tools, thinking, timing, cost). */
 export interface BubbleMetadata {
   modelName?: string;
   inputTokens?: number;
@@ -18,9 +26,13 @@ export interface BubbleMetadata {
   cachedTokens?: number;
   toolResultsCount?: number;
   toolResults?: unknown[];
+  toolCalls?: ToolCall[];
+  thinking?: string;
+  thinkingDurationMs?: number;
   /** Ms since previous user message. */
   responseTimeMs?: number;
   cost?: number;
+  contextWindowPercent?: number;
 }
 
 /** Per-conversation totals. */
@@ -31,6 +43,8 @@ export interface TabMetadata {
   modelsUsed?: string[];
   totalResponseTimeMs?: number;
   totalCost?: number;
+  totalToolCalls?: number;
+  totalThinkingDurationMs?: number;
 }
 
 export interface ChatTab {

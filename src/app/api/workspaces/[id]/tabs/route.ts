@@ -6,6 +6,13 @@ import Database from 'better-sqlite3'
 import { resolveWorkspacePath } from '@/utils/workspace-path'
 import { ComposerData } from '@/types/workspace'
 
+interface ToolCall {
+  name?: string
+  params?: string
+  result?: string
+  status?: string
+}
+
 interface ChatBubble {
   type: 'user' | 'ai'
   text: string
@@ -17,8 +24,12 @@ interface ChatBubble {
     cachedTokens?: number
     toolResultsCount?: number
     toolResults?: unknown[]
+    toolCalls?: ToolCall[]
+    thinking?: string
+    thinkingDurationMs?: number
     responseTimeMs?: number
     cost?: number
+    contextWindowPercent?: number
   }
 }
 
@@ -35,6 +46,8 @@ interface ChatTab {
     modelsUsed?: string[]
     totalResponseTimeMs?: number
     totalCost?: number
+    totalToolCalls?: number
+    totalThinkingDurationMs?: number
   }
 }
 
@@ -246,83 +259,127 @@ function extractTextFromRichText(children: any[]): string {
   return text
 }
 
-// Unified function to determine which project a conversation belongs to (same as in workspaces route)
 function determineProjectForConversation(
-  composerData: any, 
+  composerData: any,
   composerId: string,
   projectLayoutsMap: Record<string, string[]>,
   projectNameToWorkspaceId: Record<string, string>,
+  workspacePathToId: Record<string, string>,
   workspaceEntries: Array<{name: string, workspaceJsonPath: string}>,
   bubbleMap: Record<string, any>
 ): string | null {
-  // First, try to get project from projectLayouts (most accurate)
   const projectLayouts = projectLayoutsMap[composerId] || []
-  for (const projectName of projectLayouts) {
-    const workspaceId = projectNameToWorkspaceId[projectName]
-    if (workspaceId) {
-      return workspaceId
+  for (const rootPath of projectLayouts) {
+    const normalized = normalizeFilePath(rootPath)
+    let workspaceId = workspacePathToId[normalized]
+    if (!workspaceId) {
+      const folderName = rootPath.split('/').pop() || rootPath.split('\\').pop()
+      workspaceId = folderName ? projectNameToWorkspaceId[folderName] ?? '' : ''
     }
+    if (workspaceId) return workspaceId
   }
   
-  // If no project found from projectLayouts, try file-based detection (fallback)
-  // Check newlyCreatedFiles first
-  if (composerData.newlyCreatedFiles && composerData.newlyCreatedFiles.length > 0) {
+  if (composerData.newlyCreatedFiles?.length) {
     for (const file of composerData.newlyCreatedFiles) {
-      if (file.uri && file.uri.path) {
+      if (file.uri?.path) {
         const projectId = getProjectFromFilePath(file.uri.path, workspaceEntries)
         if (projectId) return projectId
       }
     }
   }
-  
-  // Check codeBlockData
-  if (composerData.codeBlockData) {
+  if (composerData.codeBlockData && typeof composerData.codeBlockData === 'object') {
     for (const filePath of Object.keys(composerData.codeBlockData)) {
-      const normalizedPath = filePath.replace('file://', '')
-      const projectId = getProjectFromFilePath(normalizedPath, workspaceEntries)
+      const projectId = getProjectFromFilePath(filePath.replace('file://', ''), workspaceEntries)
       if (projectId) return projectId
     }
   }
-  
-  // Check if this conversation has any file references in bubbles
   const conversationHeaders = composerData.fullConversationHeadersOnly || []
   for (const header of conversationHeaders) {
-    const bubbleId = header.bubbleId
-    const bubble = bubbleMap[bubbleId]
-    
-    if (bubble) {
-      // Check relevantFiles
-      if (bubble.relevantFiles && Array.isArray(bubble.relevantFiles) && bubble.relevantFiles.length > 0) {
-        for (const filePath of bubble.relevantFiles) {
-          if (filePath) {
-            const projectId = getProjectFromFilePath(filePath, workspaceEntries)
-            if (projectId) return projectId
-          }
+    const bubble = bubbleMap[header.bubbleId]
+    if (!bubble) continue
+    if (bubble.relevantFiles?.length) {
+      for (const filePath of bubble.relevantFiles) {
+        if (filePath) {
+          const projectId = getProjectFromFilePath(filePath, workspaceEntries)
+          if (projectId) return projectId
         }
       }
-      
-      // Check attachedFileCodeChunksUris
-      if (bubble.attachedFileCodeChunksUris && Array.isArray(bubble.attachedFileCodeChunksUris) && bubble.attachedFileCodeChunksUris.length > 0) {
-        for (const uri of bubble.attachedFileCodeChunksUris) {
-          if (uri && uri.path) {
-            const projectId = getProjectFromFilePath(uri.path, workspaceEntries)
-            if (projectId) return projectId
-          }
+    }
+    if (bubble.attachedFileCodeChunksUris?.length) {
+      for (const uri of bubble.attachedFileCodeChunksUris) {
+        if (uri?.path) {
+          const projectId = getProjectFromFilePath(uri.path, workspaceEntries)
+          if (projectId) return projectId
         }
       }
-      
-      // Check context.fileSelections
-      if (bubble.context && bubble.context.fileSelections && Array.isArray(bubble.context.fileSelections) && bubble.context.fileSelections.length > 0) {
-        for (const fileSelection of bubble.context.fileSelections) {
-          if (fileSelection && fileSelection.uri && fileSelection.uri.path) {
-            const projectId = getProjectFromFilePath(fileSelection.uri.path, workspaceEntries)
-            if (projectId) return projectId
-          }
+    }
+    if (bubble.context?.fileSelections?.length) {
+      for (const fs of bubble.context.fileSelections) {
+        if (fs?.uri?.path) {
+          const projectId = getProjectFromFilePath(fs.uri.path, workspaceEntries)
+          if (projectId) return projectId
         }
       }
     }
   }
-  
+
+  const pathSegments: string[] = []
+  if (composerData.newlyCreatedFiles?.length) {
+    for (const f of composerData.newlyCreatedFiles) {
+      if (f?.uri?.path) pathSegments.push(normalizeFilePath(f.uri.path))
+    }
+  }
+  if (composerData.codeBlockData && typeof composerData.codeBlockData === 'object') {
+    for (const filePath of Object.keys(composerData.codeBlockData)) {
+      pathSegments.push(normalizeFilePath(filePath.replace('file://', '')))
+    }
+  }
+  for (const header of conversationHeaders) {
+    const bubble = bubbleMap[header.bubbleId]
+    if (!bubble) continue
+    if (bubble.relevantFiles?.length) {
+      for (const filePath of bubble.relevantFiles) {
+        if (filePath) pathSegments.push(normalizeFilePath(filePath))
+      }
+    }
+    if (bubble.attachedFileCodeChunksUris?.length) {
+      for (const uri of bubble.attachedFileCodeChunksUris) {
+        if (uri?.path) pathSegments.push(normalizeFilePath(uri.path))
+      }
+    }
+    if (bubble.context?.fileSelections?.length) {
+      for (const fs of bubble.context.fileSelections) {
+        if (fs?.uri?.path) pathSegments.push(normalizeFilePath(fs.uri.path))
+      }
+    }
+  }
+  const sep = process.platform === 'win32' ? '\\' : '/'
+  const folderNameToWorkspaceId: Array<{ name: string; id: string }> = []
+  for (const entry of workspaceEntries) {
+    try {
+      const workspaceData = JSON.parse(readFileSync(entry.workspaceJsonPath, 'utf-8'))
+      for (const folder of getWorkspaceFolderPaths(workspaceData)) {
+        const name = folder.replace(/^file:\/\//, '').split('/').pop()?.split('\\').pop()
+        if (name) folderNameToWorkspaceId.push({ name, id: entry.name })
+      }
+    } catch (_) {}
+  }
+  let bestLen = 0
+  let bestId: string | null = null
+  for (const p of pathSegments) {
+    for (const { name, id } of folderNameToWorkspaceId) {
+      const needle = sep + name + sep
+      const needleEnd = sep + name
+      if (p.includes(needle) || p.endsWith(needleEnd)) {
+        if (name.length > bestLen) {
+          bestLen = name.length
+          bestId = id
+        }
+      }
+    }
+  }
+  if (bestId) return bestId
+
   return null
 }
 
@@ -352,45 +409,69 @@ function normalizeFilePath(filePath: string): string {
   return normalized
 }
 
+function getWorkspaceFolderPaths(workspaceData: { folder?: string; folders?: Array<{ path?: string }> }): string[] {
+  const paths: string[] = []
+  if (workspaceData.folder) paths.push(workspaceData.folder)
+  if (Array.isArray(workspaceData.folders)) {
+    for (const f of workspaceData.folders) {
+      if (f?.path) paths.push(f.path)
+    }
+  }
+  return paths
+}
+
 function getProjectFromFilePath(filePath: string, workspaceEntries: Array<{name: string, workspaceJsonPath: string}>): string | null {
-  // Normalize the file path for comparison
   const normalizedPath = normalizeFilePath(filePath)
-  
+  let bestMatch: string | null = null
+  let bestLen = 0
   for (const entry of workspaceEntries) {
     try {
       const workspaceData = JSON.parse(readFileSync(entry.workspaceJsonPath, 'utf-8'))
-      if (workspaceData.folder) {
-        const workspacePath = normalizeFilePath(workspaceData.folder)
-        if (normalizedPath.startsWith(workspacePath)) {
-          return entry.name
+      for (const folder of getWorkspaceFolderPaths(workspaceData)) {
+        const workspacePath = normalizeFilePath(folder)
+        if (normalizedPath.startsWith(workspacePath) && workspacePath.length > bestLen) {
+          bestLen = workspacePath.length
+          bestMatch = entry.name
         }
       }
     } catch (error) {
       console.error(`Error reading workspace ${entry.name}:`, error)
     }
   }
-  return null
+  return bestMatch
 }
 
 function createProjectNameToWorkspaceIdMap(workspaceEntries: Array<{name: string, workspaceJsonPath: string}>): Record<string, string> {
   const projectNameToWorkspaceId: Record<string, string> = {}
-  
   for (const entry of workspaceEntries) {
     try {
       const workspaceData = JSON.parse(readFileSync(entry.workspaceJsonPath, 'utf-8'))
-      if (workspaceData.folder) {
-        const workspacePath = workspaceData.folder.replace('file://', '')
+      for (const folder of getWorkspaceFolderPaths(workspaceData)) {
+        const workspacePath = folder.replace(/^file:\/\//, '')
         const folderName = workspacePath.split('/').pop() || workspacePath.split('\\').pop()
-        if (folderName) {
-          projectNameToWorkspaceId[folderName] = entry.name
-        }
+        if (folderName) projectNameToWorkspaceId[folderName] = entry.name
       }
     } catch (error) {
       console.error(`Error reading workspace ${entry.name}:`, error)
     }
   }
-  
   return projectNameToWorkspaceId
+}
+
+function createWorkspacePathToIdMap(workspaceEntries: Array<{name: string, workspaceJsonPath: string}>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const entry of workspaceEntries) {
+    try {
+      const workspaceData = JSON.parse(readFileSync(entry.workspaceJsonPath, 'utf-8'))
+      for (const folder of getWorkspaceFolderPaths(workspaceData)) {
+        const normalized = normalizeFilePath(folder)
+        out[normalized] = entry.name
+      }
+    } catch (error) {
+      console.error(`Error reading workspace ${entry.name}:`, error)
+    }
+  }
+  return out
 }
 
 export async function GET(
@@ -420,6 +501,7 @@ export async function GET(
     
     // Create project name to workspace ID mapping
     const projectNameToWorkspaceId = createProjectNameToWorkspaceIdMap(workspaceEntries)
+    const workspacePathToId = createWorkspacePathToIdMap(workspaceEntries)
 
     let bubbleMap: Record<string, any> = {}
     let codeBlockDiffMap: Record<string, any[]> = {}
@@ -531,6 +613,7 @@ export async function GET(
             composerId,
             projectLayoutsMap,
             projectNameToWorkspaceId,
+            workspacePathToId,
             workspaceEntries,
             bubbleMap
           )
@@ -612,23 +695,66 @@ export async function GET(
               // Combine text and context
               const fullText = text + contextText
               
-              if (fullText.trim()) {
-                const raw = bubble as any
-                const tokenCount = raw?.tokenCount
+              const raw = bubble as any
+              const tokenCount = raw?.tokenCount
+
+              // Extract tool calls from toolFormerData
+              let toolCalls: ToolCall[] | undefined
+              if (raw.toolFormerData && typeof raw.toolFormerData === 'object') {
+                const tfd = raw.toolFormerData
+                toolCalls = [{
+                  name: tfd.name,
+                  params: typeof tfd.params === 'string' ? tfd.params : (tfd.rawArgs || undefined),
+                  result: typeof tfd.result === 'string' ? tfd.result?.slice(0, 500) : undefined,
+                  status: tfd.status
+                }]
+              }
+
+              // Extract thinking blocks
+              let thinking: string | undefined
+              let thinkingDurationMs: number | undefined
+              if (raw.thinking) {
+                thinking = typeof raw.thinking === 'string' ? raw.thinking : raw.thinking?.text
+                thinkingDurationMs = raw.thinkingDurationMs
+              }
+
+              // Include bubble if it has text, tool calls, or thinking
+              const hasContent = fullText.trim() || toolCalls || thinking
+
+              if (hasContent) {
+                // Extract context window status
+                const ctxWindow = raw.contextWindowStatusAtCreation
+                const contextWindowPercent = ctxWindow?.percentageRemainingFloat ?? ctxWindow?.percentageRemaining
+
+                // Build display text for tool call bubbles without text
+                let displayText = fullText.trim()
+                if (!displayText && toolCalls) {
+                  const tc = toolCalls[0]
+                  displayText = `**Tool: ${tc.name || 'unknown'}**`
+                  if (tc.status) displayText += ` (${tc.status})`
+                }
+                if (!displayText && thinking) {
+                  displayText = thinking.slice(0, 200) + (thinking.length > 200 ? '...' : '')
+                }
+
                 const bubbleMeta = (messageType === 'ai' && bubble) ? {
                   modelName: raw.modelInfo?.modelName,
                   inputTokens: tokenCount?.inputTokens,
                   outputTokens: tokenCount?.outputTokens,
                   cachedTokens: tokenCount?.cachedTokens,
-                  toolResultsCount: Array.isArray(raw.toolResults) ? raw.toolResults.length : undefined,
-                  toolResults: Array.isArray(raw.toolResults) ? raw.toolResults : undefined,
-                  cost: typeof raw.cost === 'number' ? raw.cost : (raw.usageData?.cost ?? raw.usageData?.estimatedCost)
+                  toolResultsCount: toolCalls?.length ?? (Array.isArray(raw.toolResults) ? raw.toolResults.length : undefined),
+                  toolResults: Array.isArray(raw.toolResults) && raw.toolResults.length > 0 ? raw.toolResults : undefined,
+                  toolCalls,
+                  thinking,
+                  thinkingDurationMs,
+                  cost: typeof raw.cost === 'number' ? raw.cost : (raw.usageData?.cost ?? raw.usageData?.estimatedCost),
+                  contextWindowPercent
                 } : undefined
-                const hasMeta = bubbleMeta && (bubbleMeta.modelName ?? bubbleMeta.inputTokens ?? bubbleMeta.outputTokens ?? bubbleMeta.cachedTokens ?? bubbleMeta.toolResultsCount ?? bubbleMeta.cost != null)
+                const hasMeta = bubbleMeta && (bubbleMeta.modelName ?? bubbleMeta.inputTokens ?? bubbleMeta.outputTokens ?? bubbleMeta.cachedTokens ?? bubbleMeta.toolResultsCount ?? bubbleMeta.toolCalls ?? bubbleMeta.thinking ?? bubbleMeta.cost != null)
                 bubbles.push({
                   type: messageType,
-                  text: fullText,
-                  timestamp: bubble.timestamp || Date.now(),
+                  text: displayText,
+                  timestamp: bubble.createdAt || bubble.timestamp || Date.now(),
                   ...(hasMeta && { metadata: bubbleMeta })
                 })
               }
@@ -681,6 +807,8 @@ export async function GET(
             let totalCached = 0
             let totalResponseTimeMs = 0
             let totalCost = 0
+            let totalToolCalls = 0
+            let totalThinkingDurationMs = 0
             const modelsSet = new Set<string>()
             for (const b of bubbles) {
               const m = b.metadata
@@ -690,18 +818,22 @@ export async function GET(
               if (m?.responseTimeMs != null) totalResponseTimeMs += m.responseTimeMs
               if (m?.cost != null) totalCost += m.cost
               if (m?.modelName) modelsSet.add(m.modelName)
+              if (m?.toolCalls?.length) totalToolCalls += m.toolCalls.length
+              if (m?.thinkingDurationMs != null) totalThinkingDurationMs += m.thinkingDurationMs
             }
             const usageData = composerData?.usageData as { cost?: number; estimatedCost?: number } | undefined
             const composerCost = typeof usageData?.cost === 'number' ? usageData.cost : (typeof usageData?.estimatedCost === 'number' ? usageData.estimatedCost : undefined)
             if (composerCost != null && totalCost === 0) totalCost = composerCost
-            const tabMetadata = (totalInput > 0 || totalOutput > 0 || totalCached > 0 || totalResponseTimeMs > 0 || totalCost > 0 || modelsSet.size > 0)
+            const tabMetadata = (totalInput > 0 || totalOutput > 0 || totalCached > 0 || totalResponseTimeMs > 0 || totalCost > 0 || modelsSet.size > 0 || totalToolCalls > 0 || totalThinkingDurationMs > 0)
               ? {
                   totalInputTokens: totalInput || undefined,
                   totalOutputTokens: totalOutput || undefined,
                   totalCachedTokens: totalCached || undefined,
                   modelsUsed: modelsSet.size > 0 ? Array.from(modelsSet) : undefined,
                   totalResponseTimeMs: totalResponseTimeMs || undefined,
-                  totalCost: totalCost > 0 ? totalCost : undefined
+                  totalCost: totalCost > 0 ? totalCost : undefined,
+                  totalToolCalls: totalToolCalls || undefined,
+                  totalThinkingDurationMs: totalThinkingDurationMs || undefined
                 }
               : undefined
             
@@ -712,7 +844,7 @@ export async function GET(
               bubbles: bubbles.map(bubble => ({
                 type: bubble.type,
                 text: bubble.text || '',
-                timestamp: bubble.timestamp || Date.now(),
+                timestamp: bubble.timestamp,
                 ...(bubble.metadata && { metadata: bubble.metadata })
               })),
               codeBlockDiffs: codeBlockDiffs,
