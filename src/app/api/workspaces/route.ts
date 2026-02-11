@@ -281,23 +281,18 @@ export async function GET() {
               bubbleMap
             )
             
-            // If no project found, skip this conversation
+            const assignedProjectId = projectId ?? 'global'
             if (!projectId) {
-              console.log(`Could not match composer ${composerId} (${composerData.name || 'Untitled'}) to any project`)
-              console.log(`  - projectLayouts:`, projectLayoutsMap[composerId] || 'none')
-              console.log(`  - newlyCreatedFiles:`, composerData.newlyCreatedFiles?.map((f: any) => f.uri?.path) || 'none')
-              console.log(`  - codeBlockData keys:`, composerData.codeBlockData ? Object.keys(composerData.codeBlockData).slice(0, 3) : 'none')
-              continue
+              console.log(`Assigning composer ${composerId} (${composerData.name || 'Untitled'}) to Global / Unmatched`)
+            } else {
+              console.log(`Matched composer ${composerId} (${composerData.name || 'Untitled'}) to project ${projectId}`)
             }
-            
-            console.log(`Matched composer ${composerId} (${composerData.name || 'Untitled'}) to project ${projectId}`)
             
             // Add to conversation map
-            if (!conversationMap[projectId]) {
-              conversationMap[projectId] = []
+            if (!conversationMap[assignedProjectId]) {
+              conversationMap[assignedProjectId] = []
             }
-            
-            conversationMap[projectId].push({
+            conversationMap[assignedProjectId].push({
               composerId,
               name: composerData.name || `Conversation ${composerId.slice(0, 8)}`,
               newlyCreatedFiles: composerData.newlyCreatedFiles || [],
@@ -344,6 +339,18 @@ export async function GET() {
         path: entry.workspaceJsonPath,
         conversationCount: conversationCount,
         lastModified: stats.mtime.toISOString()
+      })
+    }
+
+    const globalConversations = conversationMap['global'] || []
+    if (globalConversations.length > 0) {
+      const lastUpdated = Math.max(...globalConversations.map((c) => c.lastUpdatedAt || 0), 0)
+      projects.push({
+        id: 'global',
+        name: 'Global / Unmatched',
+        path: undefined,
+        conversationCount: globalConversations.length,
+        lastModified: lastUpdated > 0 ? new Date(lastUpdated).toISOString() : new Date().toISOString()
       })
     }
     

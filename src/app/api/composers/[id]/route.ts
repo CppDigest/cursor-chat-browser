@@ -38,7 +38,25 @@ export async function GET(
         }
       }
     }
-    
+
+    // Fallback: global storage (unmatched chats)
+    const globalDbPath = path.join(workspacePath, '..', 'globalStorage', 'state.vscdb')
+    if (existsSync(globalDbPath)) {
+      const db = new Database(globalDbPath, { readonly: true })
+      const row = db.prepare(
+        "SELECT value FROM cursorDiskKV WHERE key = ?"
+      ).get(`composerData:${params.id}`) as { value: string | Buffer } | undefined
+      db.close()
+      if (row?.value) {
+        const raw = typeof row.value === 'string' ? row.value : (row.value as Buffer).toString('utf8')
+        const composer = JSON.parse(raw) as Record<string, unknown>
+        return NextResponse.json({
+          ...composer,
+          conversation: composer.conversation ?? []
+        })
+      }
+    }
+
     return NextResponse.json(
       { error: 'Composer not found' },
       { status: 404 }

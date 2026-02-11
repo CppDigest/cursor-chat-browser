@@ -28,7 +28,7 @@ interface WorkspaceState {
 export default function WorkspacePage({ params }: { params: { id: string } }) {
   const searchParams = useSearchParams()
   const [state, setState] = useState<WorkspaceState>({
-    projectName: params.id === 'global' ? 'Global Storage' : `Project ${params.id.slice(0, 8)}`,
+    projectName: params.id === 'global' ? 'Global / Unmatched' : `Project ${params.id.slice(0, 8)}`,
     tabs: [],
     composers: [],
     selectedId: searchParams.get('tab'),

@@ -10,6 +10,16 @@ interface ChatBubble {
   type: 'user' | 'ai'
   text: string
   timestamp: number
+  metadata?: {
+    modelName?: string
+    inputTokens?: number
+    outputTokens?: number
+    cachedTokens?: number
+    toolResultsCount?: number
+    toolResults?: unknown[]
+    responseTimeMs?: number
+    cost?: number
+  }
 }
 
 interface ChatTab {
@@ -18,6 +28,14 @@ interface ChatTab {
   timestamp: number
   bubbles: ChatBubble[]
   codeBlockDiffs: any[]
+  metadata?: {
+    totalInputTokens?: number
+    totalOutputTokens?: number
+    totalCachedTokens?: number
+    modelsUsed?: string[]
+    totalResponseTimeMs?: number
+    totalCost?: number
+  }
 }
 
 interface RawTab {
@@ -516,9 +534,10 @@ export async function GET(
             workspaceEntries,
             bubbleMap
           )
-          
+          const assignedProjectId = projectId ?? 'global'
+
           // Only process conversations that belong to this specific workspace
-          if (projectId !== params.id) {
+          if (assignedProjectId !== params.id) {
             continue
           }
           
@@ -594,10 +613,23 @@ export async function GET(
               const fullText = text + contextText
               
               if (fullText.trim()) {
+                const raw = bubble as any
+                const tokenCount = raw?.tokenCount
+                const bubbleMeta = (messageType === 'ai' && bubble) ? {
+                  modelName: raw.modelInfo?.modelName,
+                  inputTokens: tokenCount?.inputTokens,
+                  outputTokens: tokenCount?.outputTokens,
+                  cachedTokens: tokenCount?.cachedTokens,
+                  toolResultsCount: Array.isArray(raw.toolResults) ? raw.toolResults.length : undefined,
+                  toolResults: Array.isArray(raw.toolResults) ? raw.toolResults : undefined,
+                  cost: typeof raw.cost === 'number' ? raw.cost : (raw.usageData?.cost ?? raw.usageData?.estimatedCost)
+                } : undefined
+                const hasMeta = bubbleMeta && (bubbleMeta.modelName ?? bubbleMeta.inputTokens ?? bubbleMeta.outputTokens ?? bubbleMeta.cachedTokens ?? bubbleMeta.toolResultsCount ?? bubbleMeta.cost != null)
                 bubbles.push({
                   type: messageType,
                   text: fullText,
-                  timestamp: bubble.timestamp || Date.now()
+                  timestamp: bubble.timestamp || Date.now(),
+                  ...(hasMeta && { metadata: bubbleMeta })
                 })
               }
             }
@@ -630,8 +662,48 @@ export async function GET(
               }
             }
             
-            // Sort bubbles by timestamp to ensure proper order
             bubbles.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+
+            // Response time = ms since previous user message
+            let lastUserTimestamp: number | null = null
+            for (const b of bubbles) {
+              if (b.type === 'user') {
+                lastUserTimestamp = b.timestamp ?? null
+              } else if (b.type === 'ai' && lastUserTimestamp != null && b.timestamp != null && b.timestamp > lastUserTimestamp) {
+                const responseTimeMs = b.timestamp - lastUserTimestamp
+                if (!b.metadata) b.metadata = {}
+                b.metadata.responseTimeMs = responseTimeMs
+              }
+            }
+
+            let totalInput = 0
+            let totalOutput = 0
+            let totalCached = 0
+            let totalResponseTimeMs = 0
+            let totalCost = 0
+            const modelsSet = new Set<string>()
+            for (const b of bubbles) {
+              const m = b.metadata
+              if (m?.inputTokens != null) totalInput += m.inputTokens
+              if (m?.outputTokens != null) totalOutput += m.outputTokens
+              if (m?.cachedTokens != null) totalCached += m.cachedTokens
+              if (m?.responseTimeMs != null) totalResponseTimeMs += m.responseTimeMs
+              if (m?.cost != null) totalCost += m.cost
+              if (m?.modelName) modelsSet.add(m.modelName)
+            }
+            const usageData = composerData?.usageData as { cost?: number; estimatedCost?: number } | undefined
+            const composerCost = typeof usageData?.cost === 'number' ? usageData.cost : (typeof usageData?.estimatedCost === 'number' ? usageData.estimatedCost : undefined)
+            if (composerCost != null && totalCost === 0) totalCost = composerCost
+            const tabMetadata = (totalInput > 0 || totalOutput > 0 || totalCached > 0 || totalResponseTimeMs > 0 || totalCost > 0 || modelsSet.size > 0)
+              ? {
+                  totalInputTokens: totalInput || undefined,
+                  totalOutputTokens: totalOutput || undefined,
+                  totalCachedTokens: totalCached || undefined,
+                  modelsUsed: modelsSet.size > 0 ? Array.from(modelsSet) : undefined,
+                  totalResponseTimeMs: totalResponseTimeMs || undefined,
+                  totalCost: totalCost > 0 ? totalCost : undefined
+                }
+              : undefined
             
             response.tabs.push({
               id: composerId,
@@ -640,9 +712,11 @@ export async function GET(
               bubbles: bubbles.map(bubble => ({
                 type: bubble.type,
                 text: bubble.text || '',
-                timestamp: bubble.timestamp || Date.now()
+                timestamp: bubble.timestamp || Date.now(),
+                ...(bubble.metadata && { metadata: bubble.metadata })
               })),
-              codeBlockDiffs: codeBlockDiffs
+              codeBlockDiffs: codeBlockDiffs,
+              ...(tabMetadata && { metadata: tabMetadata })
             })
           }
           

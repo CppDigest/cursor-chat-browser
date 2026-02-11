@@ -9,6 +9,15 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
+    // Virtual workspace for unmatched chats
+    if (params.id === 'global') {
+      return NextResponse.json({
+        id: 'global',
+        path: undefined,
+        folder: undefined,
+        lastModified: new Date().toISOString()
+      })
+    }
     const workspacePath = resolveWorkspacePath()
     const dbPath = path.join(workspacePath, params.id, 'state.vscdb')
     const workspaceJsonPath = path.join(workspacePath, params.id, 'workspace.json')
