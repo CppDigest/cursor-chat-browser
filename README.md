@@ -14,6 +14,7 @@ A web application for browsing and managing chat histories from the Cursor edito
   - Markdown files
   - HTML documents (with syntax highlighting)
   - PDF documents
+- 📦 Daily bulk export: CLI or UI export of all chats (or only new since last run) to per-chat Markdown with YAML frontmatter
 - 🎨 Syntax highlighted code blocks
 - 📌 Bookmarkable chat URLs
 - ⚙️ Automatic workspace path detection
@@ -115,10 +116,27 @@ If you must use a newer Node.js version (e.g., v24+), you'll need to install Vis
   - Timestamp
 
 ### Exporting
-Each log can be exported as:
+
+**Per-log export (from the chat view):** Each log can be exported as:
 - Markdown: Plain text with code blocks
 - HTML: Styled document with syntax highlighting
 - PDF: Formatted document suitable for sharing
+
+**Daily bulk export (all chats):** One-step export of all chats or only new ones since last run:
+
+- **CLI:**
+  ```bash
+  npm run export -- --since all --out ./export
+  npm run export -- --since last --out ./export --include-composer
+  ```
+  - `--since all`: Export everything (first run or full re-export)
+  - `--since last`: Export only new/updated chats since last export
+  - `--out ./export`: Output directory (default: `./export`)
+  - `--include-composer`: Include Composer logs (optional)
+
+- **UI:** Use the "Export all" or "Export new since last" buttons on the home page.
+
+Output is one Markdown file per chat under `export/YYYY-MM-DD/<workspace_slug>/chat/<timestamp>__<title>__<log_id>.md`, with YAML frontmatter and full transcript. Export state is stored in `export_state.json` in the output directory for incremental runs.
 
 ## Development
 
