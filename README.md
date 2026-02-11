@@ -57,6 +57,43 @@ If automatic detection fails, you can manually set the path in the Configuration
 
 **Note:** Recent versions of Cursor have moved chat data storage from workspace-specific locations to global storage. This application now supports both storage methods to ensure compatibility with all Cursor versions.
 
+## Troubleshooting
+
+### Node.js Version Issues on Windows
+
+If you encounter compilation errors during `npm install` related to `better-sqlite3` and `node-gyp`, this is typically caused by using a very new or unsupported Node.js version.
+
+**Error symptoms:**
+```
+gyp ERR! find VS Could not find any Visual Studio installation to use
+gyp ERR! configure error
+```
+
+**Solution 1: Use Node.js LTS (Recommended)**
+
+The `better-sqlite3` package requires native compilation and works best with Node.js LTS versions that have prebuilt binaries available.
+
+If you're using `nvm` (Node Version Manager):
+```bash
+# Install and use Node.js 20 LTS
+nvm install 20
+nvm use 20
+
+# Clean up and reinstall
+rm -rf node_modules package-lock.json
+npm install
+```
+
+**Solution 2: Install Windows Build Tools**
+
+If you must use a newer Node.js version (e.g., v24+), you'll need to install Visual Studio with C++ build tools:
+
+1. Download Visual Studio Build Tools from https://visualstudio.microsoft.com/downloads/
+2. Install the "Desktop development with C++" workload
+3. Run `npm install` again
+
+**Note:** We recommend using Node.js 18 or 20 LTS for the best compatibility and to avoid build tool requirements.
+
 ## Usage
 
 ### Browsing Logs

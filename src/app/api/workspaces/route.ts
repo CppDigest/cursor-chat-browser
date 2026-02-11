@@ -22,16 +22,45 @@ interface ConversationData {
   createdAt: number;
 }
 
+function normalizeFilePath(filePath: string): string {
+  // Remove file:// protocol if present
+  let normalized = filePath.replace(/^file:\/\/\//, '').replace(/^file:\/\//, '')
+  
+  // URL-decode the path (handles %3a -> :, etc.)
+  try {
+    normalized = decodeURIComponent(normalized)
+  } catch (e) {
+    // If decode fails, continue with original
+  }
+  
+  // Convert forward slashes to backslashes on Windows
+  if (process.platform === 'win32') {
+    normalized = normalized.replace(/\//g, '\\')
+    // Remove leading backslash if followed by drive letter (e.g., \d:\ -> d:\)
+    normalized = normalized.replace(/^\\([a-z]:)/i, '$1')
+  }
+  
+  // Normalize to lowercase for case-insensitive comparison on Windows
+  if (process.platform === 'win32') {
+    normalized = normalized.toLowerCase()
+  }
+  
+  return normalized
+}
+
 function getProjectFromFilePath(filePath: string, workspaceEntries: Array<{name: string, workspaceJsonPath: string}>): string | null {
-  // Normalize the file path
-  const normalizedPath = filePath.replace(/^\/Users\/evaran\//, '')
+  // Normalize the file path for comparison
+  const normalizedPath = normalizeFilePath(filePath)
+  console.log(`  Trying to match file path: ${filePath} -> normalized: ${normalizedPath}`)
   
   for (const entry of workspaceEntries) {
     try {
       const workspaceData = JSON.parse(readFileSync(entry.workspaceJsonPath, 'utf-8'))
       if (workspaceData.folder) {
-        const workspacePath = workspaceData.folder.replace('file://', '').replace(/^\/Users\/evaran\//, '')
+        const workspacePath = normalizeFilePath(workspaceData.folder)
+        console.log(`    Checking against workspace ${entry.name}: ${workspacePath}`)
         if (normalizedPath.startsWith(workspacePath)) {
+          console.log(`    MATCH!`)
           return entry.name
         }
       }
@@ -75,6 +104,7 @@ function determineProjectForConversation(
   // First, try to get project from projectLayouts (most accurate)
   const projectLayouts = projectLayoutsMap[composerId] || []
   for (const projectName of projectLayouts) {
+    console.log(`  Checking projectLayout: ${projectName} -> ${projectNameToWorkspaceId[projectName] || 'NOT FOUND'}`)
     const workspaceId = projectNameToWorkspaceId[projectName]
     if (workspaceId) {
       return workspaceId
@@ -163,6 +193,7 @@ export async function GET() {
     
     // Create project name to workspace ID mapping
     const projectNameToWorkspaceId = createProjectNameToWorkspaceIdMap(workspaceEntries)
+    console.log('Project name to workspace ID mapping:', projectNameToWorkspaceId)
     
     // Initialize conversation map - only count from global storage
     const conversationMap: Record<string, ConversationData[]> = {}
@@ -189,7 +220,7 @@ export async function GET() {
             const composerId = parts[1]
             try {
               const context = JSON.parse(row.value)
-              if (context.projectLayouts && Array.isArray(context.projectLayouts)) {
+              if (context && typeof context === 'object' && context.projectLayouts && Array.isArray(context.projectLayouts)) {
                 if (!projectLayoutsMap[composerId]) {
                   projectLayoutsMap[composerId] = []
                 }
@@ -198,6 +229,7 @@ export async function GET() {
                     try {
                       const layoutObj = JSON.parse(layout)
                       if (layoutObj.rootPath) {
+                        console.log(`Found rootPath for composer ${composerId}: ${layoutObj.rootPath}`)
                         projectLayoutsMap[composerId].push(layoutObj.rootPath)
                       }
                     } catch (parseError) {
@@ -251,8 +283,14 @@ export async function GET() {
             
             // If no project found, skip this conversation
             if (!projectId) {
+              console.log(`Could not match composer ${composerId} (${composerData.name || 'Untitled'}) to any project`)
+              console.log(`  - projectLayouts:`, projectLayoutsMap[composerId] || 'none')
+              console.log(`  - newlyCreatedFiles:`, composerData.newlyCreatedFiles?.map((f: any) => f.uri?.path) || 'none')
+              console.log(`  - codeBlockData keys:`, composerData.codeBlockData ? Object.keys(composerData.codeBlockData).slice(0, 3) : 'none')
               continue
             }
+            
+            console.log(`Matched composer ${composerId} (${composerData.name || 'Untitled'}) to project ${projectId}`)
             
             // Add to conversation map
             if (!conversationMap[projectId]) {
