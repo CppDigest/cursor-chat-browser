@@ -266,8 +266,14 @@ function determineProjectForConversation(
   projectNameToWorkspaceId: Record<string, string>,
   workspacePathToId: Record<string, string>,
   workspaceEntries: Array<{name: string, workspaceJsonPath: string}>,
-  bubbleMap: Record<string, any>
+  bubbleMap: Record<string, any>,
+  composerIdToWorkspaceId?: Record<string, string>
 ): string | null {
+  // Primary: check the definitive per-workspace composer.composerData mapping
+  if (composerIdToWorkspaceId && composerIdToWorkspaceId[composerId]) {
+    return composerIdToWorkspaceId[composerId]
+  }
+  
   const projectLayouts = projectLayoutsMap[composerId] || []
   for (const rootPath of projectLayouts) {
     const normalized = normalizeFilePath(rootPath)
@@ -503,6 +509,30 @@ export async function GET(
     const projectNameToWorkspaceId = createProjectNameToWorkspaceIdMap(workspaceEntries)
     const workspacePathToId = createWorkspacePathToIdMap(workspaceEntries)
 
+    // Build a definitive composerId -> workspaceId map from per-workspace composer.composerData
+    const composerIdToWorkspaceId: Record<string, string> = {}
+    for (const entry of workspaceEntries) {
+      const wsDbPath = path.join(workspacePath, entry.name, 'state.vscdb')
+      if (!existsSync(wsDbPath)) continue
+      try {
+        const wsDb = new Database(wsDbPath, { readonly: true })
+        const composerRow = wsDb.prepare(`SELECT value FROM ItemTable WHERE [key] = 'composer.composerData'`).get() as { value: string } | undefined
+        if (composerRow?.value) {
+          const composerData = JSON.parse(composerRow.value)
+          if (composerData.allComposers && Array.isArray(composerData.allComposers)) {
+            for (const composer of composerData.allComposers) {
+              if (composer.composerId) {
+                composerIdToWorkspaceId[composer.composerId] = entry.name
+              }
+            }
+          }
+        }
+        wsDb.close()
+      } catch (error) {
+        // Skip workspaces with errors
+      }
+    }
+
     let bubbleMap: Record<string, any> = {}
     let codeBlockDiffMap: Record<string, any[]> = {}
     let messageRequestContextMap: Record<string, any[]> = {}
@@ -615,7 +645,8 @@ export async function GET(
             projectNameToWorkspaceId,
             workspacePathToId,
             workspaceEntries,
-            bubbleMap
+            bubbleMap,
+            composerIdToWorkspaceId
           )
           const assignedProjectId = projectId ?? 'global'
 
