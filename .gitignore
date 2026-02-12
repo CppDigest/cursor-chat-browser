@@ -50,3 +50,6 @@ workspace.json
 aichat.data.json
 composer_data.json
 
+# export output (user-generated)
+/export/
+
