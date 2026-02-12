@@ -34,6 +34,10 @@ function resolveWorkspacePath() {
   return getDefaultWorkspacePath()
 }
 
+function getGlobalStateDir() {
+  return path.join(os.homedir(), '.cursor-chat-browser')
+}
+
 function normalizeFilePath(p) {
   let n = (p || '').replace(/^file:\/\/\//, '').replace(/^file:\/\//, '')
   try { n = decodeURIComponent(n) } catch (_) {}
@@ -102,7 +106,8 @@ function main() {
     process.exit(1)
   }
 
-  const statePath = path.join(outDir, 'export_state.json')
+  const stateDir = getGlobalStateDir()
+  const statePath = path.join(stateDir, 'export_state.json')
   let lastExport = 0
   if (since === 'last' && fs.existsSync(statePath)) {
     try {
@@ -402,6 +407,7 @@ function main() {
     exportedCount: count,
     exportDir: outDirAbs
   }
+  fs.mkdirSync(stateDir, { recursive: true })
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf8')
 
   console.log(`Exported ${count} chat(s) to ${outDir}`)

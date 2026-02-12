@@ -134,9 +134,9 @@ If you must use a newer Node.js version (e.g., v24+), you'll need to install Vis
   - `--out ./export`: Output directory (default: `./export`)
   - `--include-composer`: Include Composer logs (optional)
 
-- **UI:** Use the "Export all" or "Export new since last" buttons on the home page.
+- **UI:** Use the "Export all" or "Export new since last" buttons on the home page. A "Save to" directory picker opens (Chrome/Edge); in other browsers the export is downloaded as a zip.
 
-Output is one Markdown file per chat under `export/YYYY-MM-DD/<workspace_slug>/chat/<timestamp>__<title>__<log_id>.md`, with YAML frontmatter and full transcript. Export state is stored in `export_state.json` in the output directory for incremental runs.
+Output is one Markdown file per chat under `export/YYYY-MM-DD/<workspace_slug>/chat/<timestamp>__<title>__<log_id>.md`, with YAML frontmatter and full transcript. Export state is stored in `~/.cursor-chat-browser/export_state.json` so incremental export works consistently regardless of where you run the project or save the export.
 
 ## Development
 
