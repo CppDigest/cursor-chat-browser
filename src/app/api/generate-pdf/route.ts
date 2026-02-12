@@ -156,7 +156,7 @@ export async function POST(request: Request) {
     // Generate PDF
     const pdfDoc = pdfMake.createPdf(docDefinition)
     
-    return new Promise((resolve) => {
+    return new Promise<NextResponse>((resolve) => {
       pdfDoc.getBuffer((buffer) => {
         resolve(new NextResponse(buffer, {
           headers: {

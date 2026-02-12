@@ -48,67 +48,89 @@ function normalizeFilePath(filePath: string): string {
   return normalized
 }
 
+function getWorkspaceFolderPaths(workspaceData: { folder?: string; folders?: Array<{ path?: string }> }): string[] {
+  const paths: string[] = []
+  if (workspaceData.folder) paths.push(workspaceData.folder)
+  if (Array.isArray(workspaceData.folders)) {
+    for (const f of workspaceData.folders) {
+      if (f?.path) paths.push(f.path)
+    }
+  }
+  return paths
+}
+
 function getProjectFromFilePath(filePath: string, workspaceEntries: Array<{name: string, workspaceJsonPath: string}>): string | null {
-  // Normalize the file path for comparison
   const normalizedPath = normalizeFilePath(filePath)
-  console.log(`  Trying to match file path: ${filePath} -> normalized: ${normalizedPath}`)
-  
+  let bestMatch: string | null = null
+  let bestLen = 0
   for (const entry of workspaceEntries) {
     try {
       const workspaceData = JSON.parse(readFileSync(entry.workspaceJsonPath, 'utf-8'))
-      if (workspaceData.folder) {
-        const workspacePath = normalizeFilePath(workspaceData.folder)
-        console.log(`    Checking against workspace ${entry.name}: ${workspacePath}`)
-        if (normalizedPath.startsWith(workspacePath)) {
-          console.log(`    MATCH!`)
-          return entry.name
+      for (const folder of getWorkspaceFolderPaths(workspaceData)) {
+        const workspacePath = normalizeFilePath(folder)
+        if (normalizedPath.startsWith(workspacePath) && workspacePath.length > bestLen) {
+          bestLen = workspacePath.length
+          bestMatch = entry.name
         }
       }
     } catch (error) {
       console.error(`Error reading workspace ${entry.name}:`, error)
     }
   }
-  return null
+  return bestMatch
 }
 
 function createProjectNameToWorkspaceIdMap(workspaceEntries: Array<{name: string, workspaceJsonPath: string}>): Record<string, string> {
   const projectNameToWorkspaceId: Record<string, string> = {}
-  
   for (const entry of workspaceEntries) {
     try {
       const workspaceData = JSON.parse(readFileSync(entry.workspaceJsonPath, 'utf-8'))
-      if (workspaceData.folder) {
-        const workspacePath = workspaceData.folder.replace('file://', '')
+      for (const folder of getWorkspaceFolderPaths(workspaceData)) {
+        const workspacePath = folder.replace(/^file:\/\//, '')
         const folderName = workspacePath.split('/').pop() || workspacePath.split('\\').pop()
-        if (folderName) {
-          projectNameToWorkspaceId[folderName] = entry.name
-        }
+        if (folderName) projectNameToWorkspaceId[folderName] = entry.name
       }
     } catch (error) {
       console.error(`Error reading workspace ${entry.name}:`, error)
     }
   }
-  
   return projectNameToWorkspaceId
 }
 
-// Unified function to determine which project a conversation belongs to
+function createWorkspacePathToIdMap(workspaceEntries: Array<{name: string, workspaceJsonPath: string}>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const entry of workspaceEntries) {
+    try {
+      const workspaceData = JSON.parse(readFileSync(entry.workspaceJsonPath, 'utf-8'))
+      for (const folder of getWorkspaceFolderPaths(workspaceData)) {
+        const normalized = normalizeFilePath(folder)
+        out[normalized] = entry.name
+      }
+    } catch (error) {
+      console.error(`Error reading workspace ${entry.name}:`, error)
+    }
+  }
+  return out
+}
+
 function determineProjectForConversation(
-  composerData: any, 
+  composerData: any,
   composerId: string,
   projectLayoutsMap: Record<string, string[]>,
   projectNameToWorkspaceId: Record<string, string>,
+  workspacePathToId: Record<string, string>,
   workspaceEntries: Array<{name: string, workspaceJsonPath: string}>,
   bubbleMap: Record<string, any>
 ): string | null {
-  // First, try to get project from projectLayouts (most accurate)
   const projectLayouts = projectLayoutsMap[composerId] || []
-  for (const projectName of projectLayouts) {
-    console.log(`  Checking projectLayout: ${projectName} -> ${projectNameToWorkspaceId[projectName] || 'NOT FOUND'}`)
-    const workspaceId = projectNameToWorkspaceId[projectName]
-    if (workspaceId) {
-      return workspaceId
+  for (const rootPath of projectLayouts) {
+    const normalized = normalizeFilePath(rootPath)
+    let workspaceId = workspacePathToId[normalized]
+    if (!workspaceId) {
+      const folderName = rootPath.split('/').pop() || rootPath.split('\\').pop()
+      workspaceId = folderName ? projectNameToWorkspaceId[folderName] ?? '' : ''
     }
+    if (workspaceId) return workspaceId
   }
   
   // If no project found from projectLayouts, try file-based detection (fallback)
@@ -131,45 +153,94 @@ function determineProjectForConversation(
     }
   }
   
-  // Check if this conversation has any file references in bubbles
   const conversationHeaders = composerData.fullConversationHeadersOnly || []
   for (const header of conversationHeaders) {
-    const bubbleId = header.bubbleId
-    const bubble = bubbleMap[bubbleId]
-    
-    if (bubble) {
-      // Check relevantFiles
-      if (bubble.relevantFiles && Array.isArray(bubble.relevantFiles) && bubble.relevantFiles.length > 0) {
-        for (const filePath of bubble.relevantFiles) {
-          if (filePath) {
-            const projectId = getProjectFromFilePath(filePath, workspaceEntries)
-            if (projectId) return projectId
-          }
+    const bubble = bubbleMap[header.bubbleId]
+    if (!bubble) continue
+    if (bubble.relevantFiles?.length) {
+      for (const filePath of bubble.relevantFiles) {
+        if (filePath) {
+          const projectId = getProjectFromFilePath(filePath, workspaceEntries)
+          if (projectId) return projectId
         }
       }
-      
-      // Check attachedFileCodeChunksUris
-      if (bubble.attachedFileCodeChunksUris && Array.isArray(bubble.attachedFileCodeChunksUris) && bubble.attachedFileCodeChunksUris.length > 0) {
-        for (const uri of bubble.attachedFileCodeChunksUris) {
-          if (uri && uri.path) {
-            const projectId = getProjectFromFilePath(uri.path, workspaceEntries)
-            if (projectId) return projectId
-          }
+    }
+    if (bubble.attachedFileCodeChunksUris?.length) {
+      for (const uri of bubble.attachedFileCodeChunksUris) {
+        if (uri?.path) {
+          const projectId = getProjectFromFilePath(uri.path, workspaceEntries)
+          if (projectId) return projectId
         }
       }
-      
-      // Check context.fileSelections
-      if (bubble.context && bubble.context.fileSelections && Array.isArray(bubble.context.fileSelections) && bubble.context.fileSelections.length > 0) {
-        for (const fileSelection of bubble.context.fileSelections) {
-          if (fileSelection && fileSelection.uri && fileSelection.uri.path) {
-            const projectId = getProjectFromFilePath(fileSelection.uri.path, workspaceEntries)
-            if (projectId) return projectId
-          }
+    }
+    if (bubble.context?.fileSelections?.length) {
+      for (const fileSelection of bubble.context.fileSelections) {
+        if (fileSelection?.uri?.path) {
+          const projectId = getProjectFromFilePath(fileSelection.uri.path, workspaceEntries)
+          if (projectId) return projectId
         }
       }
     }
   }
-  
+
+  // Fallback: path contains workspace folder name as path segment (handles different path formats)
+  const pathSegments: string[] = []
+  if (composerData.newlyCreatedFiles?.length) {
+    for (const f of composerData.newlyCreatedFiles) {
+      if (f?.uri?.path) pathSegments.push(normalizeFilePath(f.uri.path))
+    }
+  }
+  if (composerData.codeBlockData && typeof composerData.codeBlockData === 'object') {
+    for (const filePath of Object.keys(composerData.codeBlockData)) {
+      pathSegments.push(normalizeFilePath(filePath.replace('file://', '')))
+    }
+  }
+  for (const header of conversationHeaders) {
+    const bubble = bubbleMap[header.bubbleId]
+    if (!bubble) continue
+    if (bubble.relevantFiles?.length) {
+      for (const filePath of bubble.relevantFiles) {
+        if (filePath) pathSegments.push(normalizeFilePath(filePath))
+      }
+    }
+    if (bubble.attachedFileCodeChunksUris?.length) {
+      for (const uri of bubble.attachedFileCodeChunksUris) {
+        if (uri?.path) pathSegments.push(normalizeFilePath(uri.path))
+      }
+    }
+    if (bubble.context?.fileSelections?.length) {
+      for (const fs of bubble.context.fileSelections) {
+        if (fs?.uri?.path) pathSegments.push(normalizeFilePath(fs.uri.path))
+      }
+    }
+  }
+  const sep = process.platform === 'win32' ? '\\' : '/'
+  const folderNameToWorkspaceId: Array<{ name: string; id: string }> = []
+  for (const entry of workspaceEntries) {
+    try {
+      const workspaceData = JSON.parse(readFileSync(entry.workspaceJsonPath, 'utf-8'))
+      for (const folder of getWorkspaceFolderPaths(workspaceData)) {
+        const name = folder.replace(/^file:\/\//, '').split('/').pop()?.split('\\').pop()
+        if (name) folderNameToWorkspaceId.push({ name, id: entry.name })
+      }
+    } catch (_) {}
+  }
+  let bestId: string | null = null
+  let bestLen = 0
+  for (const p of pathSegments) {
+    for (const { name, id } of folderNameToWorkspaceId) {
+      const needle = sep + name + sep
+      const needleEnd = sep + name
+      if (p.includes(needle) || p.endsWith(needleEnd)) {
+        if (name.length > bestLen) {
+          bestLen = name.length
+          bestId = id
+        }
+      }
+    }
+  }
+  if (bestId) return bestId
+
   return null
 }
 
@@ -191,9 +262,8 @@ export async function GET() {
       }
     }
     
-    // Create project name to workspace ID mapping
     const projectNameToWorkspaceId = createProjectNameToWorkspaceIdMap(workspaceEntries)
-    console.log('Project name to workspace ID mapping:', projectNameToWorkspaceId)
+    const workspacePathToId = createWorkspacePathToIdMap(workspaceEntries)
     
     // Initialize conversation map - only count from global storage
     const conversationMap: Record<string, ConversationData[]> = {}
@@ -277,27 +347,28 @@ export async function GET() {
               composerId,
               projectLayoutsMap,
               projectNameToWorkspaceId,
+              workspacePathToId,
               workspaceEntries,
               bubbleMap
             )
             
-            // If no project found, skip this conversation
+            const assignedProjectId = projectId ?? 'global'
             if (!projectId) {
-              console.log(`Could not match composer ${composerId} (${composerData.name || 'Untitled'}) to any project`)
-              console.log(`  - projectLayouts:`, projectLayoutsMap[composerId] || 'none')
-              console.log(`  - newlyCreatedFiles:`, composerData.newlyCreatedFiles?.map((f: any) => f.uri?.path) || 'none')
-              console.log(`  - codeBlockData keys:`, composerData.codeBlockData ? Object.keys(composerData.codeBlockData).slice(0, 3) : 'none')
-              continue
+              console.log(`Assigning composer ${composerId} (${composerData.name || 'Untitled'}) to Other chats`)
+            } else {
+              console.log(`Matched composer ${composerId} (${composerData.name || 'Untitled'}) to project ${projectId}`)
             }
             
-            console.log(`Matched composer ${composerId} (${composerData.name || 'Untitled'}) to project ${projectId}`)
-            
+            // Only count conversations that have at least one bubble with data
+            const headers = composerData.fullConversationHeadersOnly || []
+            const hasBubbles = headers.some((h: { bubbleId: string }) => bubbleMap[h.bubbleId])
+            if (!hasBubbles) continue
+
             // Add to conversation map
-            if (!conversationMap[projectId]) {
-              conversationMap[projectId] = []
+            if (!conversationMap[assignedProjectId]) {
+              conversationMap[assignedProjectId] = []
             }
-            
-            conversationMap[projectId].push({
+            conversationMap[assignedProjectId].push({
               composerId,
               name: composerData.name || `Conversation ${composerId.slice(0, 8)}`,
               newlyCreatedFiles: composerData.newlyCreatedFiles || [],
@@ -321,12 +392,12 @@ export async function GET() {
       const dbPath = path.join(workspacePath, entry.name, 'state.vscdb')
       const stats = await fs.stat(dbPath)
       
-      // Get workspace name
       let workspaceName = `Project ${entry.name.slice(0, 8)}`
       try {
         const workspaceData = JSON.parse(await fs.readFile(entry.workspaceJsonPath, 'utf-8'))
-        if (workspaceData.folder) {
-          const folderName = workspaceData.folder.split('/').pop() || workspaceData.folder.split('\\').pop()
+        const firstFolder = workspaceData.folder || workspaceData.folders?.[0]?.path
+        if (firstFolder) {
+          const folderName = firstFolder.split('/').pop() || firstFolder.split('\\').pop()
           workspaceName = folderName || workspaceName
         }
       } catch (error) {
@@ -344,6 +415,18 @@ export async function GET() {
         path: entry.workspaceJsonPath,
         conversationCount: conversationCount,
         lastModified: stats.mtime.toISOString()
+      })
+    }
+
+    const globalConversations = conversationMap['global'] || []
+    if (globalConversations.length > 0) {
+      const lastUpdated = Math.max(...globalConversations.map((c) => c.lastUpdatedAt || 0), 0)
+      projects.push({
+        id: 'global',
+        name: 'Other chats',
+        path: undefined,
+        conversationCount: globalConversations.length,
+        lastModified: lastUpdated > 0 ? new Date(lastUpdated).toISOString() : new Date().toISOString()
       })
     }
     

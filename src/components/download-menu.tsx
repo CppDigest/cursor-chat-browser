@@ -7,7 +7,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Download } from "lucide-react"
 import { ChatTab } from "@/types/workspace"
-import { downloadMarkdown, downloadPDF, downloadHTML } from "@/lib/download"
+import { downloadMarkdown, downloadPDF, downloadHTML, downloadJson, downloadCsv, downloadCsvCodeEdits } from "@/lib/download"
 
 interface DownloadMenuProps {
   tab: ChatTab
@@ -32,6 +32,17 @@ export function DownloadMenu({ tab }: DownloadMenuProps) {
         <DropdownMenuItem onClick={() => downloadPDF(tab)}>
           Download as PDF
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => downloadJson(tab)}>
+          Download as JSON
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => downloadCsv(tab)}>
+          Download as CSV
+        </DropdownMenuItem>
+        {tab.codeBlockDiffs?.length ? (
+          <DropdownMenuItem onClick={() => downloadCsvCodeEdits(tab)}>
+            Download code edits (CSV)
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   )

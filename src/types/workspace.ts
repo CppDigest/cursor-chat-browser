@@ -10,20 +10,59 @@ export interface ChatBubble {
   timestamp?: number;
 }
 
+/** Tool call extracted from toolFormerData. */
+export interface ToolCall {
+  name?: string;
+  params?: string;
+  result?: string;
+  status?: string;
+}
+
+/** Per-message metadata (model, tokens, tools, thinking, timing, cost). */
+export interface BubbleMetadata {
+  modelName?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedTokens?: number;
+  toolResultsCount?: number;
+  toolResults?: unknown[];
+  toolCalls?: ToolCall[];
+  thinking?: string;
+  thinkingDurationMs?: number;
+  /** Ms since previous user message. */
+  responseTimeMs?: number;
+  cost?: number;
+  contextWindowPercent?: number;
+}
+
+/** Per-conversation totals. */
+export interface TabMetadata {
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCachedTokens?: number;
+  modelsUsed?: string[];
+  totalResponseTimeMs?: number;
+  totalCost?: number;
+  totalToolCalls?: number;
+  totalThinkingDurationMs?: number;
+}
+
 export interface ChatTab {
   id: string;
   title: string;
   timestamp: number;
   bubbles: {
-    type: 'user' | 'ai'
-    text: string
-    timestamp: number
+    type: 'user' | 'ai';
+    text: string;
+    timestamp: number;
+    metadata?: BubbleMetadata;
   }[];
   codeBlockDiffs?: {
-    diffId: string
-    newModelDiffWrtV0: any[]
-    originalModelDiffWrtV0: any[]
+    diffId: string;
+    newModelDiffWrtV0: any[];
+    originalModelDiffWrtV0: any[];
   }[];
+  metadata?: TabMetadata;
 }
 
 export interface Workspace {
